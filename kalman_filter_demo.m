@@ -33,17 +33,17 @@ test_PMd_motion = cellfun(@(s) s(:,target_on_idx:end)', test_PMd, 'UniformOutput
 coeffs = pca(vertcat(train_M1_motion{:}), 'NumComponents', 50); 
 train_M1_motion = cellfun(@(data) data*coeffs, train_M1_motion, 'UniformOutput', false);
 test_M1_motion = cellfun(@(data) data*coeffs, test_M1_motion, 'UniformOutput', false);
-%{
-[~, psi, ~, ~, factoran_preds] = factoran(vertcat(train_M1_motion{:}, test_M1_motion{:}), 20, 'maxit', 100000);
-train_row_dist = cellfun(@(x) size(x,1), train_M1_motion);
-test_row_dist = cellfun(@(x) size(x,1), test_M1_motion); 
-train_M1_motion = mat2cell(factoran_preds(1:sum(train_row_dist), :), train_row_dist);
-test_M1_motion = mat2cell(factoran_preds(end-sum(test_row_dist)+1:end, :), test_row_dist);
-%}
+
+% [~, psi, ~, ~, factoran_preds] = factoran(vertcat(train_M1_motion{:}, test_M1_motion{:}), 20, 'maxit', 100000);
+% train_row_dist = cellfun(@(x) size(x,1), train_M1_motion);
+% test_row_dist = cellfun(@(x) size(x,1), test_M1_motion); 
+% train_M1_motion = mat2cell(factoran_preds(1:sum(train_row_dist), :), train_row_dist);
+% test_M1_motion = mat2cell(factoran_preds(end-sum(test_row_dist)+1:end, :), test_row_dist);
+
 %% Apply Kalman filter
 filter_str = 'switching_kalman_gaussian_mixture_gaussian';
 Ns = 4; 
-[X_rms_mean, X_estimate_cell, X_estimate_var_cell, X_mse_cell, switch_state_prob_cell, observ_likelihood_history] = run_kalman_filter(train_state_motion, train_M1_motion, test_state_motion, test_M1_motion, filter_str, Ns, 0);
+[X_mse_mean, X_estimate_cell, X_estimate_var_cell, X_mse_cell, switch_state_prob_cell, observ_likelihood_history] = run_kalman_filter(train_state_motion, train_M1_motion, test_state_motion, test_M1_motion, filter_str, Ns, 0);
 
 %% Visualize dataset and the prediction result
 figure();
@@ -53,29 +53,30 @@ for i=1:size(train_state_motion,1)
 end
 hold off;
 
-trial_to_visualize = 3;
-X_estimate_linear = X_estimate_cell_linear{trial_to_visualize};
-X_estimate_var_linear = X_estimate_var_cell_linear{trial_to_visualize};
-X_estimate_switching_4 = X_estimate_cell{trial_to_visualize};
-X_estimate_var_switching_4 = X_estimate_var_cell{trial_to_visualize};
-switch_state_prob = switch_state_prob_cell{trial_to_visualize};
+trial_to_visualize = 5;
+X_estimate = X_estimate_cell{trial_to_visualize};
+X_estimate_var = X_estimate_var_cell{trial_to_visualize};
+if ~isempty(switch_state_prob_cell)
+    switch_state_prob = switch_state_prob_cell{trial_to_visualize};
+else
+    switch_state_prob = ones(size(X_estimate, 1), 1);
+end
 figure();
 hold on;
-%plot(X_estimate_linear(:,1),X_estimate_linear(:,2), 'b.-');
 color_opts = colormap('lines');
-for t=1:size(X_estimate_switching_4, 1)-1
-    [~, switch_state] = max(switch_state_prob(t, :));
-    plot(X_estimate_switching_4(t:t+1,1),X_estimate_switching_4(t:t+1,2), '.-', 'Color', color_opts(switch_state, :), 'LineWidth', 3);
-end
-%for i=2:size(X_estimate_linear,1)
-    %plot_gaussian_ellipsoid(X_estimate_linear(i,[1,2]), squeeze(X_estimate_var_linear(i,[1,2],[1,2])));
-    %plot_gaussian_ellipsoid(X_estimate_switching_4(i,[1,2]), squeeze(X_estimate_var_switching_4(i,[1,2],[1,2])));
-%end
+% for t=1:size(X_estimate, 1)-1
+%     [~, switch_state] = max(switch_state_prob(t, :));
+%     plot(X_estimate(t:t+1,1),X_estimate(t:t+1,2), '.-', 'Color', color_opts(switch_state, :), 'LineWidth', 3);  
+% end
+plot(X_estimate(:,1),X_estimate(:,2), '.-', 'Color', 'm');
+% for i=2:size(X_estimate,1)
+%     plot_gaussian_ellipsoid(X_estimate(i,[1,2]), squeeze(X_estimate_var(i,[1,2],[1,2])));
+% end
 plot(test_state_motion{trial_to_visualize}(:,1), test_state_motion{trial_to_visualize}(:,2), 'k.-');
 hold off;
 xlabel('x (cm)');
 ylabel('y (cm)');
-%legend('Switching Kalman with N_s = 4', 'Groundtruth');
+legend('Switching Kalman with N_s = 4', 'Groundtruth');
 
 figure();
 hold on; 
@@ -89,15 +90,34 @@ xticklabels(cellstr(num2str(xticks'.*10./1000)));
 ylabel('Switching state posterior probability');
 legend({'S1', 'S2', 'S3', 'S4'});
 
-for i=1:length(C_cell)
+%% Examine if the switching states are correlated with the velocity
+velocity_by_switch_state_cell = cell(Ns, 1);
+% switch_state_count_overall = zeros(Ns, 1);
+for i=1:length(X_estimate_cell)
+    vel_estimate = X_estimate_cell{i}(:, 3:4);
+    [~, switch_state] = max(switch_state_prob_cell{i}, [], 2);
+    for j=1:Ns
+        velocity_by_switch_state_cell{j} = [velocity_by_switch_state_cell{j};...
+            vel_estimate(switch_state==j, :)];
+    end
+end
+mean_velocity_by_switch_state = cellfun(@mean, velocity_by_switch_state_cell, 'UniformOutput', false); 
+figure();
+for i = 1:length(mean_velocity_by_switch_state)
+    hold on;
+    plotv(mean_velocity_by_switch_state{i}');
+    hold off;
+end
+legend({'S1', 'S2', 'S3', 'S4'}, 'Location', 'northwest');
+xlabel('Horizontal velocity (cm/s)');
+ylabel('Vertical velocity (cm/s)');
+for i=1:length(velocity_by_switch_state_cell)
     figure();
-    imagesc(C_cell{i});
-    colorbar;
-    title(sprintf('Transformation matrix C for switching state %d', i));
-    xticks(1:4);
-    xticklabels({'x', 'y', 'v_x', 'v_y'});
-    xlabel('Kinematic states');
-    ylabel('Neural activity principal directions');
+    hold on;
+    plotv(velocity_by_switch_state_cell{i}');
+    hold off;
+    xlabel('Horizontal velocity (cm/s)');
+    ylabel('Vertical velocity (cm/s)');
 end
 
 %% Repeat tests for switching Kalman
@@ -116,7 +136,7 @@ for i=1:length(num_of_switch_state_opts)
     end
 end
 save('switching_kalman_test_result.mat', 'mse_mean_mat', 'observ_likelihood_history_mat');
-%%
+
 color_opts = colormap('lines');
 figure();
 hold on;
